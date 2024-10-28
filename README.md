@@ -11,7 +11,7 @@ This repository provides a Gymnasium environment for voltage control task in ele
 
 Currently two types of environments are supported: ```VoltageControlEnv``` and the variant ```DeltaStepVoltageControlEnv```. The difference is how the agent interacts with the environment. In the former the agent specifies its desired pq-setpoint, while in the variant the agent only specifies a desired change (delta) from the current setpoint.
 
-The structure of the environment can be broadly visualized with this (incomplete) class diagram:
+The structure of the environment can be broadly visualized with this (incomplete and not up-to-date) class diagram:
 
 ![Class Diagram](imgs/class-diagram-voltage-control-env.png)
 
