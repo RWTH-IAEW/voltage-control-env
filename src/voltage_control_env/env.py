@@ -161,6 +161,7 @@ class VoltageControlEnv(gym.Env):
             self.net['sgen'].loc[:, 'p_mw'] = scenario['sgen']['p_mw']
             self.net['sgen'].loc[:, 'q_mvar'] = scenario['sgen'].get('q_mvar', 0)
             self.net['sgen'].loc[:, 'max_p_mw'] = scenario['sgen']['max_p_mw']
+            self.net['sgen'].loc[:, 'min_p_mw'] = scenario['sgen'].get('min_p_mw', 0)
             self.net['sgen'].loc[:, 'max_q_mvar'] = scenario['sgen']['max_q_mvar']
 
         if random_setpoint_reset:
@@ -289,7 +290,6 @@ class DeltaStepVoltageControlEnv(VoltageControlEnv):
         self.net.sgen.loc[self.ctrl_sgen_indices, 'q_mvar'] = np.clip(np.array(self.net.sgen.loc[self.ctrl_sgen_indices, 'q_mvar'], dtype=np.float64),
                                                                     effective_min_q,
                                                                     effective_max_q)
-
 
 class MeanRewardWrapper(gym.RewardWrapper):
     '''
