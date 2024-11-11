@@ -303,6 +303,8 @@ class ConstrainedPQArea(PQArea):
         return np.clip(self.pq_area.total_p_flexibility(), -1, 1)
 
     def q_flexibility(self, p_pu, vm_pu=None):
+        if not isinstance(p_pu, np.ndarray):
+            p_pu = np.array(p_pu)
         q_flex = self.pq_area.q_flexibility(p_pu, vm_pu)
         q_flex_circle = np.vstack([-np.sqrt(1 - p_pu**2), np.sqrt(1-p_pu**2)])
         clipped_q_flex = np.clip(q_flex, q_flex_circle[0, :].reshape(-1, 1), q_flex_circle[1, :].reshape(-1, 1))

@@ -152,7 +152,8 @@ class VoltageControlEnv(gym.Env):
             self.sm.net['sgen'].loc[:, 'q_mvar'] = scenario['sgen'].get('q_mvar', 0)
             self.sm.net['sgen'].loc[:, 'max_p_mw'] = scenario['sgen']['max_p_mw']
             self.sm.net['sgen'].loc[:, 'min_p_mw'] = scenario['sgen'].get('min_p_mw', 0)
-            self.sm.net['sgen'].loc[:, 'max_q_mvar'] = scenario['sgen']['max_q_mvar']
+            self.sm.net['sgen'].loc[:, 'max_q_mvar'] = self.sm.net['sgen'].loc[:, 'sn_mva']  # pu is the s_max bound
+            self.sm.net['sgen'].loc[:, 'min_q_mvar'] = -self.sm.net['sgen'].loc[:, 'sn_mva']
 
         if random_setpoint_reset:
             # Randomize the initial P,Q setpoint by rejection sampling.
