@@ -1,10 +1,75 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from typing import List
+import copy
 
 import gymnasium as gym
 import numpy as np
 from shapely import Polygon, LineString, Point
 
-    
+from .dataset import DataSet, SimbenchDataSet
+
+class ScenarioManager:
+    '''
+    Class wrapping the information about the scenarios provided to the environment.
+    '''
+    def __init__(self,
+                 net, # pandapower net
+                 dataset: DataSet,
+                 ctrl_sgen_idx: List[int] = None,
+                 pq_areas: List[ConstrainedPQArea] | ConstrainedPQArea | str = 'cone',
+                 pv_converter_oversize: int = 1.1):
+        '''
+        Initializes the Scenario Manager
+        Parameters:
+            pp_net: Underlying pandapower network.
+            dataset: Dataset holding the scenario profiles.
+            control_sgen_idx: List of indices of the controllable (= observable) sgens. If None all the sgens are controllable.
+            pq_areas: List of feasible (constrained) pq-areas for every controllable sgen (same length as control_sgen_idx).
+                      If single pq-area or pq-area type as string, the given pq-area is applied to every controllable sgen.
+            pv_converter_oversize: pv_converter_oversize: The oversizing factor of the PV converter in relation to the maximum p: S_max = P_max * pv_converter_oversize
+        '''
+        self.net = net
+        self.dataset = dataset
+        if ctrl_sgen_idx:
+            self.ctrl_sgen_indices = ctrl_sgen_idx
+        else:
+            # make all the sgens controllable
+            self.ctrl_sgen_indices = list(range(len(net.sgen)))
+        
+        if isinstance(pq_areas, List):
+            self.pq_areas = pq_areas
+        elif isinstance(pq_areas, PQArea):
+            self.pq_areas = [copy.deepcopy(pq_areas) for _ in self.ctrl_sgen_indices]
+        elif isinstance(pq_areas, str):
+            self.pq_areas = [create_PQ_area(pq_areas) for _ in self.ctrl_sgen_indices]
+
+        self.pv_converter_oversize = pv_converter_oversize
+
+        self.no_agents = len(self.ctrl_sgen_indices)
+
+        self._init_pv_converter()
+
+    def _init_pv_converter(self,):
+        '''
+        Sets the converter capacity for all sgens according to formula: S_max = pv_converter_oversize * P_max
+        '''
+
+        # get the total maximum p over the entire dataset
+        # TODO: This is not a very efficient solution...
+        p_total_max = -1 * np.ones(shape=(len(self.net.sgen),))
+        for idx in range(self.dataset.get_length()):
+            max_p_mw = self.dataset.get_item(idx)['sgen']['max_p_mw']
+            p_total_max = np.maximum(p_total_max, max_p_mw)
+        
+        # compute the s_max
+        s_max = p_total_max * self.pv_converter_oversize
+
+        # write data to network
+        self.net.sgen['sn_mva'] = s_max
+
+
 class ObservationGenerator(ABC):
     '''
     Base class responsible for generating observation for every controllable sgen.
@@ -148,6 +213,7 @@ class StandardRewardGenerator(RewardGenerator):
 
         return reward
 
+
 class PQArea(ABC):
     """
     Base class for modeling feasible PQ areas
@@ -220,6 +286,31 @@ class PQAreaPOLYGON(PQArea):
     def is_inside(self, p, q):
         return self.in_area([p],[q])[0]
     
+class ConstrainedPQArea(PQArea):
+    '''
+    PQ-area wrapper that constrains the area such that it does not allow regions outside the unit circle (adhering to maximum apparent power)
+    '''
+    def __init__(self, pq_area: PQArea):
+        self.pq_area = pq_area
+
+    def is_inside(self, p, q):
+        in_pq_area = self.pq_area.is_inside(p, q)
+        in_circle = np.sqrt(p**2 + q**2) <= 1
+
+        return (in_pq_area and in_circle)
+    
+    def total_p_flexibility(self):
+        return np.clip(self.pq_area.total_p_flexibility(), -1, 1)
+
+    def q_flexibility(self, p_pu, vm_pu=None):
+        if not isinstance(p_pu, np.ndarray):
+            p_pu = np.array(p_pu)
+        q_flex = self.pq_area.q_flexibility(p_pu, vm_pu)
+        q_flex_circle = np.vstack([-np.sqrt(1 - p_pu**2), np.sqrt(1-p_pu**2)])
+        clipped_q_flex = np.clip(q_flex, q_flex_circle[0, :].reshape(-1, 1), q_flex_circle[1, :].reshape(-1, 1))
+
+        return clipped_q_flex
+
 
 def create_PQ_area(area_type: str):
     '''
@@ -227,6 +318,6 @@ def create_PQ_area(area_type: str):
     Currently supported areas: box, cone
     '''
     if area_type.lower() == 'box':
-        return PQAreaPOLYGON(p_points_pu=(1, 1, 0, 0), q_points_pu=(-1, 1, 1, -1))
+        return ConstrainedPQArea(PQAreaPOLYGON(p_points_pu=(1, 1, 0, 0), q_points_pu=(-1, 1, 1, -1)))
     if area_type.lower() == 'cone':
-        return PQAreaPOLYGON(p_points_pu=(1,0,1), q_points_pu=(-1, 0, 1))
+        return ConstrainedPQArea(PQAreaPOLYGON(p_points_pu=(1, 0, 1), q_points_pu=(-1, 0, 1)))
