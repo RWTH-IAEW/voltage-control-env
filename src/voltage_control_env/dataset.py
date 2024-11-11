@@ -40,7 +40,7 @@ class SimbenchDataSet(DataSet):
     Base class for Simbench-style datasets. Expects the data to be given as "absolute profiles" as defined by Simbench.
     '''
 
-    def __init__(self, absolute_profiles, clean_threshold=1e-4, pv_converter_oversize=1.1):
+    def __init__(self, absolute_profiles, clean_threshold=1e-4):
         '''
         Initializes a SimbenchDataSet from the provided absolute profiles.
         Parameters:
@@ -49,15 +49,11 @@ class SimbenchDataSet(DataSet):
         '''
         super().__init__()
         self.clean_threshold = clean_threshold
-        self.pv_converter_oversize = pv_converter_oversize
         self.absolute_profiles = absolute_profiles
 
         # clean the data wrt to threshold
         if clean_threshold:
             self._clean_data(clean_threshold)
-
-        # init the pv_converter size (S_max)
-        self._init_pv_converter(pv_converter_oversize)
 
         # precompute length of dataset
         self.length = len(self.absolute_profiles[('sgen', 'p_mw')])
