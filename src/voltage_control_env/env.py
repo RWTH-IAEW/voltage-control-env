@@ -97,16 +97,20 @@ class VoltageControlEnv(gym.Env):
         # set desired active and reactive power injections rel * max + (1-rel) * min
         rel_p_action = (action[:, 0] + 1) / 2
         p_flexibilities = np.vstack([pq_area.total_p_flexibility() for pq_area in self.sm.pq_areas])
-        effective_min_p = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'] * p_flexibilities[:, 0], dtype=np.float64)
-        effective_max_p = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'] * p_flexibilities[:, 1], dtype=np.float64)
+        effective_min_p = np.maximum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'min_p_mw'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * p_flexibilities[:, 0]).astype(np.float64)
+        effective_max_p = np.minimum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * p_flexibilities[:, 1]).astype(np.float64)
 
         p_inj = rel_p_action * effective_max_p + (1 - rel_p_action) * effective_min_p
 
-        p_pu = rel_p_action * p_flexibilities[:, 1] + (1 - rel_p_action) * p_flexibilities[:, 0]
+        p_pu = p_inj / (self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'] + 10**-7)
         q_flexibilities = np.vstack([pq_area.q_flexibility([p_pu[idx]]) for idx, pq_area in enumerate(self.sm.pq_areas)])
-        effective_min_q = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'] * q_flexibilities[:, 0], dtype=np.float64)
-        effective_max_q = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'] * q_flexibilities[:, 1], dtype=np.float64)
-
+        effective_min_q = np.maximum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'min_q_mvar'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * q_flexibilities[:, 0]).astype(np.float64)
+        effective_max_q = np.minimum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'].to_numpy(), 
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * q_flexibilities[:, 1]).astype(np.float64)
+        
         q_inj = (action[:, 1] + 1) / 2 * effective_max_q + (1 - (action[:, 1] +  1) / 2) * effective_min_q
 
         # apply to net
@@ -152,36 +156,46 @@ class VoltageControlEnv(gym.Env):
             self.sm.net['sgen'].loc[:, 'q_mvar'] = scenario['sgen'].get('q_mvar', 0)
             self.sm.net['sgen'].loc[:, 'max_p_mw'] = scenario['sgen']['max_p_mw']
             self.sm.net['sgen'].loc[:, 'min_p_mw'] = scenario['sgen'].get('min_p_mw', 0)
-            self.sm.net['sgen'].loc[:, 'max_q_mvar'] = self.sm.net['sgen'].loc[:, 'sn_mva']  # pu is the s_max bound
+
+            # Note: These values for the q_bounds are general maxima which do not hold for every active power p
+            # Set for the sake of completeness. For the exact bound the PQ-areas have to be considered
+            self.sm.net['sgen'].loc[:, 'max_q_mvar'] = self.sm.net['sgen'].loc[:, 'sn_mva']  # 1pu is the s_max bound
             self.sm.net['sgen'].loc[:, 'min_q_mvar'] = -self.sm.net['sgen'].loc[:, 'sn_mva']
 
         if random_setpoint_reset:
-            # Randomize the initial P,Q setpoint by rejection sampling.
-            # WARNING: This can be arbitrarily slow and even fail in the worst case if the PQ area is very small compared to the square from -1 to 1
-            # In most cases this should work just fine with a few iterations
-            #setpoint = np.zeros(shape=(self.no_agents, 2))
+            # Randomize the initial P,Q setpoint uniformly by rejection sampling.
+            # WARNING: This can be arbitrarily slow and even fail in the worst case if the PQ area is very small compared to
+            # the action space constrained by max/min p_mw and max/min q_mvar.
+            # In most relevant cases this should work just fine with a few iterations
             setpoints = []
             indices = []
-            no_resampling_steps = 200
+            no_resampling_steps = 100
             for agent_idx in range(self.sm.no_agents):
                 step = 0
+                min_p, max_p = self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices[agent_idx], 'min_p_mw'], self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices[agent_idx], 'max_p_mw']
+                min_q, max_q = self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices[agent_idx], 'min_q_mvar'], self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices[agent_idx], 'max_q_mvar']
+                max_s = self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices[agent_idx], 'sn_mva']
                 while step < no_resampling_steps:
-                    pq = self.np_random.uniform(low=-1, high=1, size=(2, ))
-                    if self.sm.pq_areas[agent_idx].is_inside(pq[0], pq[1]):
-                        setpoints.append(pq)
+                    # sample point 
+                    p = self.np_random.uniform(low=min_p, high=max_p, size=1).item()
+                    q = self.np_random.uniform(low=min_q, high=max_q, size=1).item()
+
+                    if self.sm.pq_areas[agent_idx].is_inside(p/(max_s + 1e-7), q/(max_s + 1e-7)):  # if inside the region
+                        setpoints.append((p,q))
                         indices.append(self.sm.ctrl_sgen_indices[agent_idx])
                         break
 
                     step += 1
                 
-                if step == no_resampling_steps: # has not been successful
-                    print('WARNING: rejection sampling did not converge. Could not sample a pq-setpoint on episode reset for agent.')
+                # if step == no_resampling_steps: # has not been successful
+                #     print('WARNING: rejection sampling did not converge. Could not sample a pq-setpoint on episode reset for agent.')
 
-            setpoints = np.vstack(setpoints)
+            setpoints = np.array(setpoints)
 
             # apply the sampled setpoints to the network
-            self.sm.net['sgen'].loc[indices, 'p_mw'] = self.sm.net['sgen'].loc[indices, 'max_p_mw'] * setpoints[:, 0]
-            self.sm.net['sgen'].loc[indices, 'q_mvar'] = self.sm.net['sgen'].loc[indices, 'max_q_mvar'] * setpoints[:, 1]
+            if len(indices) > 0:
+                self.sm.net['sgen'].loc[indices, 'p_mw'] = setpoints[:, 0]
+                self.sm.net['sgen'].loc[indices, 'q_mvar'] = setpoints[:, 1]
 
             # update the scenario
             scenario['sgen']['p_mw'] = np.array(self.sm.net['sgen'].loc[:, 'p_mw'])
@@ -254,12 +268,12 @@ class DeltaStepVoltageControlEnv(VoltageControlEnv):
         Makes sure that the set action (p_inj, q_inj) is inside the feasible region by clipping.
         '''
 
-        # set desired active and reactive power injections rel * max + (1-rel) * min
-
         # convert the clip region to absolute values
         p_flexibilities = np.vstack([pq_area.total_p_flexibility() for pq_area in self.sm.pq_areas])
-        effective_min_p = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'] * p_flexibilities[:, 0], dtype=np.float64)
-        effective_max_p = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'] * p_flexibilities[:, 1], dtype=np.float64)
+        effective_min_p = np.maximum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'min_p_mw'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * p_flexibilities[:, 0]).astype(np.float64)
+        effective_max_p = np.minimum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * p_flexibilities[:, 1]).astype(np.float64)
 
         # Clip p to [p_min, p_max]
         self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] = np.clip(np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'], dtype=np.float64),
@@ -267,10 +281,12 @@ class DeltaStepVoltageControlEnv(VoltageControlEnv):
                                                                           effective_max_p)
         
         # convert the q-clip region to absolute values
-        p_pu = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] / (self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_p_mw'] + 10**-7), dtype=np.float64)
+        p_pu = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] / (self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'] + 10**-7), dtype=np.float64)
         q_flexibilities = np.vstack([pq_area.q_flexibility([p_pu[idx]]) for idx, pq_area in enumerate(self.sm.pq_areas)])
-        effective_min_q = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'] * q_flexibilities[:, 0], dtype=np.float64)
-        effective_max_q = np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'] * q_flexibilities[:, 1], dtype=np.float64)
+        effective_min_q = np.maximum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'min_q_mvar'].to_numpy(),
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * q_flexibilities[:, 0]).astype(np.float64)
+        effective_max_q = np.minimum(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'max_q_mvar'].to_numpy(), 
+                                     self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'sn_mva'].to_numpy() * q_flexibilities[:, 1]).astype(np.float64)
 
         # Clip q to the corresponding values
         self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'q_mvar'] = np.clip(np.array(self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'q_mvar'], dtype=np.float64),
