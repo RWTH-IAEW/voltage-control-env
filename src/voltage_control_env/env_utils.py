@@ -315,9 +315,14 @@ class ConstrainedPQArea(PQArea):
 def create_PQ_area(area_type: str):
     '''
     Factory function to create different (typical) PQ-areas.
-    Currently supported areas: box, cone
+    Currently supported areas: box, cone, cone90 (min power factor 0.9)
     '''
     if area_type.lower() == 'box':
         return ConstrainedPQArea(PQAreaPOLYGON(p_points_pu=(1, 1, 0, 0), q_points_pu=(-1, 1, 1, -1)))
-    if area_type.lower() == 'cone':
+    elif area_type.lower() == 'cone':
         return ConstrainedPQArea(PQAreaPOLYGON(p_points_pu=(1, 0, 1), q_points_pu=(-1, 0, 1)))
+    elif area_type.lower() == 'cone90':
+        q_max = np.sqrt((1-0.9**2)/0.9**2)
+        return ConstrainedPQArea(PQAreaPOLYGON(p_points_pu=(1, 0, 1), q_points_pu=(-q_max, 0, q_max)))
+    else:
+        return NotImplementedError('Unknown area type!')
