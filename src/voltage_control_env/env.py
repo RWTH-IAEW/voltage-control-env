@@ -1,8 +1,12 @@
 from typing import List
 
+import pandapower as pp
+import pandapower.plotting as plot
 import gymnasium as gym
 import numpy as np
-import pandapower as pp
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 from .dataset import DataSet, SimbenchDataSet
 from .env_utils import ObservationGenerator, RewardGenerator, PQArea, ScenarioManager
@@ -15,6 +19,12 @@ class VoltageControlEnv(gym.Env):
 
     In this environment the agent specifies his action by directly setting a desired setpoint in the feasible PQ-area.
     '''
+
+    metadata = {
+        "render_modes": ["rgb_array"],
+        "render_fps": 2,
+        }
+    
     def __init__(self, 
                  scenario_manager : ScenarioManager,
                  reward_generator : RewardGenerator,
@@ -38,6 +48,7 @@ class VoltageControlEnv(gym.Env):
 
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(self.sm.no_agents, 2))
         self.observation_space = observation_generator.observation_space  # per agent
+
 
     def reset(self, seed=None, options=None):
         '''
@@ -128,6 +139,108 @@ class VoltageControlEnv(gym.Env):
 
         return next_obs, reward, False, False, {}
     
+    def render(self,):
+
+        NODE_SIZE = 0.07
+        MAX_SIZE = 0.5
+        RING_SIZE = 0.005
+        max_sn = np.max(self.sm.net.sgen['sn_mva'])
+
+        # retrieve the busses which do not have any flexibilities whatsoever
+        flex_bus_idx = self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'bus'].to_numpy()
+        non_flex_bus_idx = np.array([bus for bus in self.sm.net.bus.index if bus not in flex_bus_idx])
+
+        lc = plot.create_line_collection(self.sm.net, self.sm.net.line.index, color="grey", zorder=1, use_bus_geodata=True) #create lines
+        tc = plot.create_trafo_collection(self.sm.net, self.sm.net.trafo.index, size=NODE_SIZE, color="grey", zorder=1) # create trafos
+        bc_inactive = plot.create_bus_collection(self.sm.net, non_flex_bus_idx, size=NODE_SIZE, color='grey', zorder=1) # create inactive buses
+
+        # for every active bus compute exactly the size of outer ring, inner circle and color of circle
+        bcs_active = []
+        cmap = plt.cm.coolwarm
+        norm = mcolors.Normalize(vmin=0, vmax=1)
+
+        for i, (id, bus_id) in enumerate(zip(self.sm.ctrl_sgen_indices, flex_bus_idx)):
+            # outer ring
+            outer_ring_size = (self.sm.net.sgen.loc[id, 'max_p_mw'] / (max_sn + 1e-7)) * MAX_SIZE
+            bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size, color='black', zorder=1))
+            bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size-RING_SIZE, color='white', zorder=2))
+
+            # inner_circle
+            # compute the size of the inner circle based on the p injection
+            inner_circle_size = (self.sm.net.sgen.loc[id, 'p_mw'] / (self.sm.net.sgen.loc[id, 'max_p_mw'] + 1e-7)) * outer_ring_size
+            # compute the color of the inner circle based on the q injection
+            rel_p_inj = self.sm.net.sgen.loc[id, 'p_mw'] / (self.sm.net.sgen.loc[id, 'sn_mva'] + 1e-7)
+            q_flex = (self.sm.pq_areas[i].q_flexibility([rel_p_inj]) * self.sm.net.sgen.loc[id, 'sn_mva'])[0]
+            q_rel = (self.sm.net.sgen.loc[id, 'q_mvar'] - q_flex[0]) / (q_flex[1]-q_flex[0] + 1e-7)  # in the range of 0 to 1
+
+            # Get the color from the colormap
+            color = cmap(norm(q_rel))
+            # color = 'blue'
+                
+            bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=inner_circle_size, color=color, zorder=3))
+
+        # create the network state plot
+        #cmap_lc_list_load=[(20, "green"), (50, "yellow"), (80, "red")]
+        #cmap_lc_load, norm_lc_load = plot.cmap_continuous(cmap_lc_list_load)
+
+        #lc_load = plot.create_line_collection(self.sm.net, self.sm.net.line.index, zorder=1, cmap=cmap_lc_load, norm=norm_lc_load, use_bus_geodata=True, plot_colormap=False)
+        lc_load = plot.create_line_collection(self.sm.net, self.sm.net.line.index, zorder=1, color='grey', use_bus_geodata=True, plot_colormap=False)
+
+        # cmap_bc_list_load=[(0.93, "blue"),(1.0, "green"), (1.07, "red")]
+        # cmap_bc_load, norm_bc_load = plot.cmap_continuous(cmap_bc_list_load)
+        cmap_bc_load = plt.cm.viridis
+        norm_bc_load = mcolors.Normalize(vmin=0.93, vmax=1.07)
+
+        bc_load = plot.create_bus_collection(self.sm.net, self.sm.net.bus.index, zorder=2, cmap=cmap_bc_load, norm=norm_bc_load, size=NODE_SIZE, plot_colormap=False)
+
+        tc_load = plot.create_trafo_collection(self.sm.net, self.sm.net.trafo.index, zorder=1, color='grey', size=NODE_SIZE)
+
+        # Draw
+        fig, axs = plt.subplots(2, 1, figsize=(10, 12), gridspec_kw={'hspace': 0.00})
+        plot.draw_collections([lc_load, bc_load, tc_load], ax=axs[0])
+        plot.draw_collections([lc, tc, bc_inactive] + bcs_active, ax=axs[1])
+        
+        # Add a colorbar for load map
+        mapp_load = plt.cm.ScalarMappable(cmap=cmap_bc_load, norm=norm_bc_load)  # Create a scalar mappable
+        mapp_load.set_array([])  # Required for colorbar
+        cbar_load = fig.colorbar(mapp_load, ax=axs[0], orientation='vertical', label="Bus Voltage [pu]", shrink=0.75)
+
+        # Design
+        cbar_load.outline.set_visible(False)
+
+        # Add a colorbar
+        mapp = plt.cm.ScalarMappable(cmap=cmap, norm=norm)  # Create a scalar mappable
+        mapp.set_array([])  # Required for colorbar
+        cbar = fig.colorbar(mapp, ax=axs[1], orientation='vertical', label='Q-injection', shrink=0.75)  # Add colorbar
+
+        # Set custom ticks and labels
+        tick_positions = [0, 1]  # Positions where you want ticks
+        tick_labels = ['Min','Max']  # Custom labels
+        cbar.set_ticks(tick_positions)
+        cbar.set_ticklabels(tick_labels)
+
+        # Design
+        cbar.outline.set_visible(False)
+
+        # plt.tight_layout(pad=0)
+
+        # convert to RGB array
+        # Draw the figure on a canvas
+        canvas = FigureCanvas(fig)
+        canvas.draw()
+        
+        # Extract the RGBA buffer
+        buf = canvas.buffer_rgba()
+        
+        # Convert to a NumPy array and drop the alpha channel
+        rgb_array = np.asarray(buf, dtype=np.uint8)[:, :, :3]
+
+        # cleaning up
+        plt.close()
+        
+        return rgb_array
+
+    
     def _handle_action(self, action: np.ndarray):
 
         if len(action.shape) == 1:
@@ -210,6 +323,12 @@ class DeltaStepVoltageControlEnv(VoltageControlEnv):
     A variant of the Voltage Control Environment. Instead of setting the desired setpoint,
     the agent specifies its desired absolute change of the current setpoint.
     '''
+    metadata = {
+        "render_modes": ["rgb_array"],
+        "render_fps": 10,
+        }
+
+
     def __init__(self,
                  scenario_manager: ScenarioManager,
                  reward_generator : RewardGenerator,
