@@ -22,14 +22,15 @@ class VoltageControlEnv(gym.Env):
 
     metadata = {
         "render_modes": ["rgb_array"],
-        "render_fps": 2,
+        "render_fps": 10,
         }
     
     def __init__(self, 
                  scenario_manager : ScenarioManager,
                  reward_generator : RewardGenerator,
                  observation_generator : ObservationGenerator,
-                 random_setpoint_reset: bool = True):
+                 random_setpoint_reset: bool = True,
+                 step_delay: float = 0.0):
         '''
         Initializes the environment.
         Parameters:
@@ -37,11 +38,14 @@ class VoltageControlEnv(gym.Env):
             reward_generator: Reward Generator used for generating rewards.
             observation_generator: Observation Generator used for generating environment observations.
             random_setpoint_reset: Whether the setpoint is randomized (among feasible pq setpoints) upon reset or not.
+            step_delay: Floating number in the range of [0,1] specifiying the speed of convergence to a desired setpoint.
+                        For delay = 0 the setpoint is reached in one step.
         '''
         self.sm = scenario_manager
         self.reward_generator = reward_generator
         self.observation_generator = observation_generator
         self.random_setpoint_reset = random_setpoint_reset
+        self.step_delay = step_delay
         
         self.scenario_id = None
         self.scenario = None
@@ -124,9 +128,9 @@ class VoltageControlEnv(gym.Env):
         
         q_inj = (action[:, 1] + 1) / 2 * effective_max_q + (1 - (action[:, 1] +  1) / 2) * effective_min_q
 
-        # apply to net
-        self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] = p_inj
-        self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'q_mvar'] = q_inj
+        # apply to net considering the delay
+        self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] = self.step_delay * self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'p_mw'] + (1 - self.step_delay) * p_inj
+        self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'q_mvar'] = self.step_delay * self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'q_mvar'] + (1 - self.step_delay) * q_inj
 
         # run power flow
         pp.runpp(self.sm.net)
