@@ -159,7 +159,7 @@ class StandardObservationGenerator(ObservationGenerator):
     
     @property
     def observation_space(self,):
-        return gym.spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.ctrl_sgen_indices),))
+        return gym.spaces.Box(low=-np.inf, high=np.inf, shape=(4,))
     
 
 class StandardRewardGenerator(RewardGenerator):
