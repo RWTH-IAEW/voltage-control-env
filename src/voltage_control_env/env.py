@@ -144,12 +144,29 @@ class VoltageControlEnv(gym.Env):
         return next_obs, reward, False, False, {}
     
     def render(self,):
+        
+        ##################################
+        # Determine the sizing
+        ##################################
 
-        NODE_SIZE = 0.07
-        MAX_SIZE = 0.5
-        RING_SIZE = 0.005
-        max_sn = np.max(self.sm.net.sgen['sn_mva'])
+        # Retrieve the coordinates of buses
+        bus_geodata = self.sm.net.bus_geodata
 
+        # Calculate plot extent
+        x_min, x_max = bus_geodata['x'].min(), bus_geodata['x'].max()
+        y_min, y_max = bus_geodata['y'].min(), bus_geodata['y'].max()
+
+        # Determine a scaling factor based on the extent
+        scaling_factor = max(x_max - x_min, y_max - y_min)
+
+        MAX_SIZE = 0.08 * scaling_factor
+        NODE_SIZE = 0.007 * scaling_factor
+        RING_SIZE = 0.0005 * scaling_factor
+        max_sn = np.max(self.sm.net.sgen['sn_mva'] * self.sm.net.sgen['scaling'])
+
+        #############################
+        # PREPARING THE SGEN PLOT
+        #############################
         # retrieve the busses which do not have any flexibilities whatsoever
         flex_bus_idx = self.sm.net.sgen.loc[self.sm.ctrl_sgen_indices, 'bus'].to_numpy()
         non_flex_bus_idx = np.array([bus for bus in self.sm.net.bus.index if bus not in flex_bus_idx])
@@ -165,7 +182,7 @@ class VoltageControlEnv(gym.Env):
 
         for i, (id, bus_id) in enumerate(zip(self.sm.ctrl_sgen_indices, flex_bus_idx)):
             # outer ring
-            outer_ring_size = (self.sm.net.sgen.loc[id, 'max_p_mw'] / (max_sn + 1e-7)) * MAX_SIZE
+            outer_ring_size = (self.sm.net.sgen.loc[id, 'max_p_mw'] * self.sm.net.sgen.loc[id, 'scaling'] / (max_sn + 1e-7)) * MAX_SIZE
             bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size, color='black', zorder=1))
             bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size-RING_SIZE, color='white', zorder=2))
 
@@ -183,6 +200,9 @@ class VoltageControlEnv(gym.Env):
                 
             bcs_active.append(plot.create_bus_collection(self.sm.net, [bus_id], size=inner_circle_size, color=color, zorder=3))
 
+        ################################
+        # PREPARING BUS VOLTAGE PLOT
+        ################################
         # create the network state plot
         #cmap_lc_list_load=[(20, "green"), (50, "yellow"), (80, "red")]
         #cmap_lc_load, norm_lc_load = plot.cmap_continuous(cmap_lc_list_load)
@@ -196,37 +216,107 @@ class VoltageControlEnv(gym.Env):
         norm_bc_load = mcolors.Normalize(vmin=0.93, vmax=1.07)
 
         bc_load = plot.create_bus_collection(self.sm.net, self.sm.net.bus.index, zorder=2, cmap=cmap_bc_load, norm=norm_bc_load, size=NODE_SIZE, plot_colormap=False)
-
         tc_load = plot.create_trafo_collection(self.sm.net, self.sm.net.trafo.index, zorder=1, color='grey', size=NODE_SIZE)
 
+        ############################
+        # PREPARING LINE LOADING PLOT
+        ############################
+
+        cmap_lc_load = plt.cm.viridis
+        norm_lc_load = mcolors.Normalize(vmin=0, vmax=120)
+
+        lc_load2 = plot.create_line_collection(self.sm.net, self.sm.net.line.index, zorder=1, cmap=cmap_lc_load, norm=norm_lc_load, use_bus_geodata=True, plot_colormap=False)
+        bc_load2 = plot.create_bus_collection(self.sm.net, self.sm.net.bus.index, zorder=2, color='grey', size=NODE_SIZE)
+        tc_load2 = plot.create_trafo_collection(self.sm.net, self.sm.net.trafo.index, zorder=1, cmap=cmap_lc_load, norm=norm_lc_load, size=NODE_SIZE, plot_colormap=False)
+
+        ############################
+        # PREPARING LOAD P-Q PLOT
+        ############################
+
+        # lc = plot.create_line_collection(self.sm.net, self.sm.net.line.index, color="grey", zorder=1, use_bus_geodata=True) #create lines
+        # tc = plot.create_trafo_collection(self.sm.net, self.sm.net.trafo.index, size=NODE_SIZE, color="grey", zorder=1) # create trafos
+        
+        # compute the size of busses for P load
+        bcs_loads = []
+        # cmap = plt.cm.coolwarm
+        # norm = mcolors.Normalize(vmin=0, vmax=1)
+        # Define the custom colormap with two discrete colors: grey and black
+        pq_colors = ["grey", "black"]
+        cmap_bc_loads = mcolors.LinearSegmentedColormap.from_list("custom_cmap", pq_colors, N=2)
+        # Define the boundaries and normalization
+        bounds = [0, 1, 2]  # 0 to 1 for grey, 1 to 2 for black
+        norm_bc_loads = mcolors.BoundaryNorm(bounds, cmap.N)
+
+        for bus_id in self.sm.net.bus.index:
+            # outer ring
+            #outer_ring_size = (self.sm.net.load.loc[id, 'p_mw'] / (max_sn + 1e-7)) * MAX_SIZE
+            #bcs_loads.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size, color='black', zorder=1))
+            #bcs_loads.append(plot.create_bus_collection(self.sm.net, [bus_id], size=outer_ring_size-RING_SIZE, color='white', zorder=2))
+
+            # inner_circle
+            # compute the size of the inner circle based on the p injection
+            circle_size_p = (self.sm.net.load.loc[bus_id, 'p_mw'] * self.sm.net.load.loc[bus_id, 'scaling'] / (max_sn + 1e-7)) * MAX_SIZE
+            circle_size_q = (self.sm.net.load.loc[bus_id, 'q_mvar'] * self.sm.net.load.loc[bus_id, 'scaling'] / (max_sn + 1e-7)) * MAX_SIZE
+
+            # print(self.sm.net.load.loc[id, 'p_mw'])
+            # compute the color of the inner circle based on the q injection
+            #rel_p_inj = self.sm.net.sgen.loc[id, 'p_mw'] / (self.sm.net.sgen.loc[id, 'sn_mva'] + 1e-7)
+            #q_flex = (self.sm.pq_areas[i].q_flexibility([rel_p_inj]) * self.sm.net.sgen.loc[id, 'sn_mva'])[0]
+            #q_rel = (self.sm.net.sgen.loc[id, 'q_mvar'] - q_flex[0]) / (q_flex[1]-q_flex[0] + 1e-7)  # in the range of 0 to 1
+
+            # Get the color from the colormap
+            # color = cmap_bc_loads(norm_bc_loads(0 if ))
+            # color = 'blue'
+                
+            bcs_loads.append(plot.create_bus_collection(self.sm.net, [bus_id], size=circle_size_p, color=cmap_bc_loads(norm_bc_loads(2)), zorder=3 if circle_size_p > circle_size_q else 2))
+            bcs_loads.append(plot.create_bus_collection(self.sm.net, [bus_id], size=circle_size_q, color=cmap_bc_loads(norm_bc_loads(0)), zorder=2 if circle_size_q > circle_size_p else 2))
+
+
+        #####################
+        # START DRAWING PLOTS
+        #####################
+
         # Draw
-        fig, axs = plt.subplots(2, 1, figsize=(10, 12), gridspec_kw={'hspace': 0.00})
-        plot.draw_collections([lc_load, bc_load, tc_load], ax=axs[0])
-        plot.draw_collections([lc, tc, bc_inactive] + bcs_active, ax=axs[1])
+        fig, axs = plt.subplots(2, 2, figsize=(20, 12), gridspec_kw={'hspace': 0.00, 'wspace': 0.00})
+        plot.draw_collections([lc_load, bc_load, tc_load], ax=axs[0][0])
+        plot.draw_collections([lc, tc, bc_inactive] + bcs_active, ax=axs[1][0])
+        plot.draw_collections([lc_load2, bc_load2, tc_load2], ax=axs[0][1])
+        plot.draw_collections([lc, tc] + bcs_loads, ax=axs[1][1])
         
         # Add a colorbar for load map
         mapp_load = plt.cm.ScalarMappable(cmap=cmap_bc_load, norm=norm_bc_load)  # Create a scalar mappable
         mapp_load.set_array([])  # Required for colorbar
-        cbar_load = fig.colorbar(mapp_load, ax=axs[0], orientation='vertical', label="Bus Voltage [pu]", shrink=0.75)
-
-        # Design
+        cbar_load = fig.colorbar(mapp_load, ax=axs[0][0], orientation='vertical', label="Bus Voltage [pu]", shrink=0.75)
         cbar_load.outline.set_visible(False)
 
-        # Add a colorbar
+        # Add a colorbar for line loadings
+        mapp_load2 = plt.cm.ScalarMappable(cmap=cmap_lc_load, norm=norm_lc_load)  # Create a scalar mappable
+        mapp_load2.set_array([])  # Required for colorbar
+        cbar_load2 = fig.colorbar(mapp_load2, ax=axs[0][1], orientation='vertical', label="Line Loading [%]", shrink=0.75)
+        cbar_load2.outline.set_visible(False)
+
+        # Add a colorbar for sgen injections
         mapp = plt.cm.ScalarMappable(cmap=cmap, norm=norm)  # Create a scalar mappable
         mapp.set_array([])  # Required for colorbar
-        cbar = fig.colorbar(mapp, ax=axs[1], orientation='vertical', label='Q-injection', shrink=0.75)  # Add colorbar
-
+        cbar = fig.colorbar(mapp, ax=axs[1][0], orientation='vertical', label='Q-injection', shrink=0.75)  # Add colorbar
         # Set custom ticks and labels
         tick_positions = [0, 1]  # Positions where you want ticks
         tick_labels = ['Min','Max']  # Custom labels
         cbar.set_ticks(tick_positions)
         cbar.set_ticklabels(tick_labels)
-
-        # Design
         cbar.outline.set_visible(False)
 
-        # plt.tight_layout(pad=0)
+        # Add a colorbar for sgen injections
+        mapp_loads = plt.cm.ScalarMappable(cmap=cmap_bc_loads, norm=norm_bc_loads)  # Create a scalar mappable
+        mapp_loads.set_array([])  # Required for colorbar
+        cbar_loads = fig.colorbar(mapp_loads, ax=axs[1][1], orientation='vertical', label='Load Legend', shrink=0.75)  # Add colorbar
+        # Set custom ticks and labels
+        tick_positions = [0.5, 1.5]  # Positions where you want ticks
+        tick_labels = ['Q','P']  # Custom labels
+        cbar_loads.set_ticks(tick_positions)
+        cbar_loads.set_ticklabels(tick_labels)
+        cbar_loads.outline.set_visible(False)
+
 
         # convert to RGB array
         # Draw the figure on a canvas
