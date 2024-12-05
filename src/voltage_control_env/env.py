@@ -144,10 +144,24 @@ class VoltageControlEnv(gym.Env):
         return next_obs, reward, False, False, {}
     
     def render(self,):
+        
+        ##################################
+        # Determine the sizing
+        ##################################
 
-        NODE_SIZE = 0.07
-        MAX_SIZE = 0.5
-        RING_SIZE = 0.005
+        # Retrieve the coordinates of buses
+        bus_geodata = self.sm.net.bus_geodata
+
+        # Calculate plot extent
+        x_min, x_max = bus_geodata['x'].min(), bus_geodata['x'].max()
+        y_min, y_max = bus_geodata['y'].min(), bus_geodata['y'].max()
+
+        # Determine a scaling factor based on the extent
+        scaling_factor = max(x_max - x_min, y_max - y_min)
+
+        MAX_SIZE = 0.08 * scaling_factor
+        NODE_SIZE = 0.007 * scaling_factor
+        RING_SIZE = 0.0005 * scaling_factor
         max_sn = np.max(self.sm.net.sgen['sn_mva'] * self.sm.net.sgen['scaling'])
 
         #############################
@@ -517,7 +531,7 @@ class FlattenObservationWrapper(gym.ObservationWrapper):
 
     def observation(self, obs):
         new_obs = np.zeros(shape=(self.observation_space.shape))
-        
+
         for idx, named_obs in enumerate(obs.values()):
             new_obs[idx*self.single_agent_obs_size : (idx+1)*self.single_agent_obs_size] = np.array(list(named_obs.values()))
 
