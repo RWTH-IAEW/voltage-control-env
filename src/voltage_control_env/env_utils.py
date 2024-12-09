@@ -118,14 +118,16 @@ class StandardObservationGenerator(ObservationGenerator):
     Observation Manager considering the voltage, current active power injection, current reactive power injection
     and the maximum possible power injection per observable bus.
     '''
-    def __init__(self, net_ref, control_sgen_idx) -> None:
+    def __init__(self, net_ref, control_sgen_idx, normalize=False) -> None:
         '''
         Initializes the ObservationGenerator. 
         Parameters:
             net_ref: The underlying pandapower network
             control_sgen_idx: The indices of the controlled (= observed) sgens
+            normalize: Whether the observations should be normalized
         '''
         super().__init__(net_ref, control_sgen_idx)
+        self.normalize = normalize
 
     def generate_observation(self,):
         '''
@@ -152,6 +154,12 @@ class StandardObservationGenerator(ObservationGenerator):
             local_obs['p_inj'] = self.net.sgen.loc[sgen_idx, 'p_mw']
             local_obs['q_inj'] = self.net.sgen.loc[sgen_idx, 'q_mvar']
             local_obs['max_p'] = self.net.sgen.loc[sgen_idx, 'max_p_mw']
+
+            if self.normalize:
+                max_sn = self.net.sgen.loc[sgen_idx, 'sn_mva']
+                local_obs['p_inj'] /= max_sn
+                local_obs['q_inj'] /= max_sn
+                local_obs['max_p'] /= max_sn
 
             obs[sgen_idx] = local_obs
 
