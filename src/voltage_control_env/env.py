@@ -523,7 +523,7 @@ class SumRewardWrapper(gym.RewardWrapper):
     Can be used for (standard) centralized control approaches (and is conform with Gymnasium specification.)
     '''
     def __init__(self, env: VoltageControlEnv):
-        super(MeanRewardWrapper, self).__init__(env)
+        super(SumRewardWrapper, self).__init__(env)
 
     def reward(self, reward):
         return np.sum(list(reward.values()))
