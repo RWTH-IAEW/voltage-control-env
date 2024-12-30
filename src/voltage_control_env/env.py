@@ -516,7 +516,17 @@ class MeanRewardWrapper(gym.RewardWrapper):
 
     def reward(self, reward):
         return np.mean(list(reward.values()))
+    
+class SumRewardWrapper(gym.RewardWrapper):
+    '''
+    Environment wrapper used to transform the multi-agent reward output to the sum scalar value.
+    Can be used for (standard) centralized control approaches (and is conform with Gymnasium specification.)
+    '''
+    def __init__(self, env: VoltageControlEnv):
+        super(MeanRewardWrapper, self).__init__(env)
 
+    def reward(self, reward):
+        return np.sum(list(reward.values()))
 class FlattenObservationWrapper(gym.ObservationWrapper):
     '''
     Environment wrapper used to transform the nested multi-agent observation output to a one-dimensional numpy array by flattening.
