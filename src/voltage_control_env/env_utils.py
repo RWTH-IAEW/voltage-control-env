@@ -174,7 +174,15 @@ class StandardRewardGenerator(RewardGenerator):
     '''
     Reward Generator penalizing the violation of the voltage bounds, rewards minimal curtailment of sgens
     '''
-    def __init__(self, net_ref, control_sgen_idx, max_volt=1.05, min_volt=0.95, k_penalty = 100, k_power = 1, global_curtail_norm = False) -> None:
+    def __init__(self,
+                 net_ref,
+                 control_sgen_idx,
+                 max_volt=1.05,
+                 min_volt=0.95,
+                 k_penalty=100,
+                 k_power=1,
+                 global_curtail_norm=False,
+                 switch_reward=True) -> None:
         '''
         Initializes the Reward Generator.
         Parameters:
@@ -185,6 +193,7 @@ class StandardRewardGenerator(RewardGenerator):
             k_penalty: multiplicative factor penalizing deviation from voltage bounds
             k_power: mutliplicatve factor rewarding power usage
             global_curtail_norm: Whether the power reward is normalized over all sgens or individually to [0,1]
+            switch_reward: Whether there is a switch between violation penalty and curtailment reward or they are always combined
         '''
         super().__init__(net_ref, control_sgen_idx)
         self.max_volt = max_volt
@@ -192,6 +201,7 @@ class StandardRewardGenerator(RewardGenerator):
         self.k_penalty = k_penalty
         self.k_power = k_power
         self.global_curtail_norm = global_curtail_norm
+        self.switch_reward = switch_reward
 
     def generate_reward(self):
         '''
@@ -208,25 +218,25 @@ class StandardRewardGenerator(RewardGenerator):
         band_violations = np.abs(self.net.res_bus['vm_pu'] - np.clip(self.net.res_bus['vm_pu'], self.min_volt, self.max_volt))
         max_violation = np.max(band_violations)
 
-        # In this case only give the penalty as reward
-        if max_violation > 0:
-            for ctrl_idx in self.ctrl_sgen_indices:
+        # apply the violation penalty
+        for ctrl_idx in self.ctrl_sgen_indices:
                 reward[ctrl_idx] = self.k_penalty * -max_violation
-        else:
+            
+        if not self.switch_reward or max_violation < 1e-5: # skips the curtailment reward if violation + switch_reward
             # compute the curtailment reward
             # TODO: Currently there is a discontinuity for the reward at 0. p = 0.1 / 0.1 is 1 but p = 0 / 0 is 0 
             # Discontinuity is not present in absolute case
             if not self.global_curtail_norm:
                 norm_fac = self.net.sgen.loc[self.ctrl_sgen_indices, 'max_p_mw'] - self.net.sgen.loc[self.ctrl_sgen_indices, 'min_p_mw']
             else:
-                # this is kinda assuming that the sn_mva does not change between the steps, otherwise the reward per sgen will not be comparable
+                # this is assuming that the sn_mva does not change between the steps, otherwise the reward per sgen will not be comparable
                 norm_fac = max(self.net.sgen.loc[self.ctrl_sgen_indices, 'sn_mva'])
             
             power_vals = self.net.sgen.loc[self.ctrl_sgen_indices, 'p_mw'] - self.net.sgen.loc[self.ctrl_sgen_indices, 'min_p_mw']
             power_vals = power_vals / (norm_fac + 1e-7)
 
             for ctrl_idx, rel_pow in zip(self.ctrl_sgen_indices, power_vals):
-                reward[ctrl_idx] = self.k_power * rel_pow
+                reward[ctrl_idx] += self.k_power * rel_pow
 
         return reward
 
