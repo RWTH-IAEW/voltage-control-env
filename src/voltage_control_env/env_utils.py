@@ -118,7 +118,7 @@ class StandardObservationGenerator(ObservationGenerator):
     Observation Manager considering the voltage, current active power injection, current reactive power injection
     and the maximum possible power injection per observable bus.
     '''
-    def __init__(self, net_ref, control_sgen_idx, normalize=False) -> None:
+    def __init__(self, net_ref, control_sgen_idx, normalize=True) -> None:
         '''
         Initializes the ObservationGenerator. 
         Parameters:
@@ -181,7 +181,7 @@ class StandardRewardGenerator(RewardGenerator):
                  min_volt=0.95,
                  k_penalty=100,
                  k_power=1,
-                 global_curtail_norm=False,
+                 global_curtail_norm=True,
                  switch_reward=True) -> None:
         '''
         Initializes the Reward Generator.
